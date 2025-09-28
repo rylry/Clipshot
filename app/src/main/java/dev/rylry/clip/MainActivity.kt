@@ -5,46 +5,21 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.os.IBinder
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import android.widget.Button
 import android.widget.Toast
+import androidx.core.app.ActivityCompat
+import java.io.File
 
 class MainActivity : ComponentActivity() {
-
     private var recordingService: RecordingService? = null
-    private var bound = false
-
-    private val connection = object : ServiceConnection {
-        override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
-            val binder = service as RecordingService.LocalBinder
-            recordingService = binder.getService()
-            bound = true
-        }
-
-        override fun onServiceDisconnected(name: ComponentName?) {
-            bound = false
-        }
-    }
-
-    override fun onStart() {
-        super.onStart()
-        val intent = Intent(this, RecordingService::class.java)
-        bindService(intent, connection, Context.BIND_AUTO_CREATE)
-    }
-
-    override fun onStop() {
-        super.onStop()
-        if (bound) {
-            unbindService(connection)
-            bound = false
-        }
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         requestPermissions()
@@ -61,7 +36,7 @@ class MainActivity : ComponentActivity() {
             text = "Save Current Buffer"
             setOnClickListener {
                 if (bound) {
-                    recordingService?.saveCurrentBufferToFile()
+                    recordingService?.saveBuffersMP4()
                     Toast.makeText(this@MainActivity, "Buffer saved!", Toast.LENGTH_SHORT).show()
                 } else {
                     Toast.makeText(this@MainActivity, "Service not bound", Toast.LENGTH_SHORT)
@@ -69,7 +44,6 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-
         setContentView(saveButton)
     }
 
@@ -98,8 +72,45 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+    private val requestCameraPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (granted) {
+            } else {
+                Toast.makeText(this, "Camera permission denied", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+
     private fun startRecordingService() {
         val intent = Intent(this, RecordingService::class.java)
         ContextCompat.startForegroundService(this, intent)
+    }
+
+    private var bound = false
+
+    private val connection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
+            val binder = service as RecordingService.AudioServiceBinder
+            recordingService = binder.getService()
+            bound = true
+        }
+
+        override fun onServiceDisconnected(name: ComponentName?) {
+            bound = false
+        }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        val intent = Intent(this, RecordingService::class.java)
+        bindService(intent, connection, Context.BIND_AUTO_CREATE)
+    }
+
+    override fun onStop() {
+        super.onStop()
+        if (bound) {
+            unbindService(connection)
+            bound = false
+        }
     }
 }
