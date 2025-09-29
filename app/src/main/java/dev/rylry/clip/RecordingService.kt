@@ -5,15 +5,8 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
-import android.graphics.ImageFormat
-import android.hardware.camera2.CameraCaptureSession
-import android.hardware.camera2.CameraCharacteristics
-import android.hardware.camera2.CameraDevice
-import android.hardware.camera2.CameraManager
-import android.hardware.camera2.params.StreamConfigurationMap
 import android.media.AudioFormat
 import android.media.AudioRecord
-import android.media.ImageReader
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
@@ -21,7 +14,6 @@ import android.media.MediaMuxer
 import android.media.MediaRecorder
 import android.os.Binder
 import android.os.IBinder
-import android.provider.MediaStore
 import androidx.annotation.RequiresPermission
 import androidx.core.app.NotificationCompat
 import java.io.File
@@ -42,9 +34,6 @@ class RecordingService : Service() {
     var isRecordingVideo: Boolean = false
     var recordingThread: Thread? = null
     var record: AudioRecord? = null
-
-    lateinit var cameraDevice: CameraDevice
-    lateinit var imageReader: ImageReader
 
     private val binder = AudioServiceBinder()
 
@@ -69,7 +58,6 @@ class RecordingService : Service() {
         )
     }
 
-    @RequiresPermission(allOf = [Manifest.permission.CAMERA])
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         // Create notification
         val channelId = "RecordingServiceChannel"
@@ -85,8 +73,6 @@ class RecordingService : Service() {
 
         // Start recording in background thread
         startRecording()
-        startCamera()
-
         return START_STICKY
     }
 
@@ -130,86 +116,7 @@ class RecordingService : Service() {
         record?.stop()
     }
 
-    @RequiresPermission(Manifest.permission.CAMERA)
-    fun startCamera() {
-        val manager: CameraManager = getSystemService(CAMERA_SERVICE) as CameraManager
-
-        // Get the right camera
-        // --------------------
-        val cameras = manager.cameraIdList.filter {
-            val characteristics = manager.getCameraCharacteristics(it)
-            val lensFacing = characteristics.get(CameraCharacteristics.LENS_FACING)
-
-            // Check if the camera has LENS_FACING property and it's facing backward
-            lensFacing != null && lensFacing == CameraCharacteristics.LENS_FACING_BACK
-        }
-
-        val camera = cameras[0]
-
-        manager.openCamera(camera, object : CameraDevice.StateCallback() {
-            override fun onDisconnected(camera: CameraDevice) {
-                camera.close()
-            }
-
-            override fun onError(camera: CameraDevice, error: Int) {
-                camera.close()
-            }
-
-            override fun onOpened(camera: CameraDevice) {
-                cameraDevice = camera
-                setupCaptureSession()
-            }
-        }, null)
-
-        // Create an ImageReader for the camera to record to
-        // -------------------------------------------------
-        val characteristics = manager.getCameraCharacteristics(camera)
-        val map = characteristics.get(
-            CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP
-        ) as StreamConfigurationMap
-
-        val size = (map.getOutputSizes(ImageFormat.YUV_420_888))?.maxByOrNull { it.width * it.height }
-
-        imageReader = ImageReader.newInstance( // ImageReader is a canvas that raw camera pixels can be fed to
-            size?.width ?: 1,
-            size?.height ?: 1, ImageFormat.YUV_420_888, 2
-        )
-
-        imageReader.setOnImageAvailableListener(object : ImageReader.OnImageAvailableListener {
-            override fun onImageAvailable(reader: ImageReader?) {
-                reader?.let { reader ->
-                    val rawFrame = reader.acquireLatestImage()
-                    val format = MediaFormat.createVideoFormat(
-                        MediaFormat.MIMETYPE_VIDEO_AVC,
-                        imageReader.width,
-                        imageReader.height
-                    ).apply {
-                        setInteger(MediaFormat.KEY_BIT_RATE, 2_500_000)
-                        setInteger(MediaFormat.KEY_FRAME_RATE, 30)
-                        setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
-                        setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-                    }
-
-                }
-            }
-        }, null)
-    }
-
-    private fun setupCaptureSession() {
-        val surfaces = listOf(imageReader.surface)
-        cameraDevice.createCaptureSession(surfaces, object : CameraCaptureSession.StateCallback() {
-            override fun onConfigured(session: CameraCaptureSession) {
-                val captureRequestBuilder = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
-                    addTarget(imageReader.surface) // Surface where frames will go
-                }
-
-                // Start the session
-                session.setRepeatingRequest(captureRequestBuilder.build(), null, null)
-            }
-            override fun onConfigureFailed(session: CameraCaptureSession) { /* ... */ }
-        }, null)
-    }
-    fun saveBuffersMP4() {
+    fun saveBuffersM4A() {
 
         val outputFile = File(filesDir, "audio_${System.currentTimeMillis()}.m4a")
 
