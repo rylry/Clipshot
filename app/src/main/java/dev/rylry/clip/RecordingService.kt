@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.BroadcastReceiver
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -23,13 +24,18 @@ import android.media.MediaFormat
 import android.media.MediaMuxer
 import android.media.MediaRecorder
 import android.hardware.camera2.CameraAccessException
+import android.net.Uri
 import android.os.Binder
+import android.os.Build
+import android.os.Environment
 import android.os.IBinder
+import android.provider.MediaStore
 import android.util.Log
 import android.view.Surface
 import androidx.annotation.RequiresPermission
 import androidx.core.app.NotificationCompat
 import java.io.File
+import java.io.FileInputStream
 import java.nio.ByteBuffer
 import kotlin.math.min
 
@@ -361,6 +367,8 @@ class RecordingService : Service() {
         val second = audioBuffer.copyOfRange(0, audioWritePointer)
         val pcmData = first + second
 
+        val time = System.currentTimeMillis()
+
         // --- Audio encoding setup ---
         val audioSampleRate = 44100
         val audioChannelCount = 1
@@ -442,7 +450,7 @@ class RecordingService : Service() {
         }
 
         val videoOutputFormat = encoder.getOutputFormat()
-        val outputFile = File(filesDir, "combined_${System.currentTimeMillis()}.mp4")
+        val outputFile = File(filesDir, "cache.mp4")
 
         // --- Muxer setup ---
         val muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
@@ -474,6 +482,8 @@ class RecordingService : Service() {
         audioEncoder.release()
         muxer.stop()
         muxer.release()
+
+        downloadCache(this, time)
     }
 
     // Helper class to store frame data and track index
@@ -482,4 +492,32 @@ class RecordingService : Service() {
         val info: MediaCodec.BufferInfo,
         val trackIndex: Int
     )
+
+    fun downloadCache(context: Context, time: Long) {
+        val sourceFile = File(context.filesDir, "cache.mp4")
+        if (!sourceFile.exists()) return
+
+        val values = ContentValues().apply {
+            put(MediaStore.Audio.Media.DISPLAY_NAME, "clip_${time}")
+            put(MediaStore.Audio.Media.MIME_TYPE, "video/mp4")
+            put(MediaStore.Audio.Media.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+        }
+
+        val resolver = context.contentResolver
+        val uri: Uri = (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+        } else {
+            val musicDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC)
+            if (!musicDir.exists()) musicDir.mkdirs()
+            val destFile = File(musicDir, "clip_${time}.mp4")
+            Uri.fromFile(destFile)
+        })!!
+
+        resolver.openOutputStream(uri, "w")?.use { out ->
+            FileInputStream(sourceFile).use { input ->
+                input.copyTo(out)
+            }
+            out.flush()   // ensure all bytes are written
+        }
+    }
 }
