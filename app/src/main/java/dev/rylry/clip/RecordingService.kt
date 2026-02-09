@@ -10,89 +10,105 @@ import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.media.AudioFormat
-import android.media.AudioRecord
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
 import android.media.MediaMuxer
-import android.media.MediaRecorder
 import android.net.Uri
 import android.os.Binder
 import android.os.Build
 import android.os.Environment
+import android.os.Handler
 import android.os.IBinder
+import android.os.PowerManager
 import android.provider.MediaStore
 import androidx.annotation.RequiresPermission
 import androidx.core.app.NotificationCompat
+import androidx.media.app.NotificationCompat as MediaNotificationCompat
 import java.io.File
 import java.io.FileInputStream
 import kotlin.math.min
 
-const val EXTRA_SAVE_BUFFERS = "save_buffers"
 class RecordingService : Service() {
-    var sampleRateHz: Int = 44100 // Example sample rate
-    var recordDurationSeconds: Int = 30
-    var channelConfig: Int = AudioFormat.CHANNEL_IN_MONO
-    var audioFormat: Int = AudioFormat.ENCODING_PCM_16BIT
-    var audioBufferSize: Int = sampleRateHz * recordDurationSeconds * 2 // Because PCM16 is 2 bytes/sample
-    var audioBuffer = ByteArray(audioBufferSize)
-    var audioWritePointer: Int = 0
-    var audioChunkSize: Int = AudioRecord.getMinBufferSize(sampleRateHz, channelConfig, audioFormat)
-    var isRecording: Boolean = false
-    var recordingThread: Thread? = null
-    var record: AudioRecord? = null
     private val binder = AudioServiceBinder()
 
     inner class AudioServiceBinder : Binder() {
         fun getService(): RecordingService = this@RecordingService
     }
 
-    override fun onBind(intent: Intent?): IBinder {
-        return binder
+    private lateinit var wakeLock: PowerManager.WakeLock
+
+    private val watchdogInterval = 5000L // 5 seconds
+    private val watchdogRunnable = object : Runnable {
+        override fun run() {
+            try {
+                val active = NativeAudio.isRecordingActive() // Add this JNI method
+                if (!active) {
+                    NativeAudio.stop()
+                    NativeAudio.start()
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                NativeAudio.stop()
+                NativeAudio.start()
+            } finally {
+                handler.postDelayed(this, watchdogInterval)
+            }
+        }
     }
+    private lateinit var handler: Handler
 
+    override fun onBind(intent: Intent?): IBinder = binder
 
-    @RequiresPermission(allOf = [Manifest.permission.RECORD_AUDIO])
     override fun onCreate() {
         super.onCreate()
-        registerReceiver(saveReceiver, IntentFilter("dev.rylry.SAVE_BUFFERS"), Context.RECEIVER_EXPORTED)
-        record = AudioRecord(
-            MediaRecorder.AudioSource.MIC,
-            sampleRateHz,
-            channelConfig,
-            audioFormat,
-            audioBufferSize
+
+        handler = Handler(getMainLooper())
+
+
+        registerReceiver(
+            saveReceiver,
+            IntentFilter("dev.rylry.SAVE_BUFFERS"),
+            RECEIVER_EXPORTED
         )
     }
 
+    @RequiresPermission(allOf = [Manifest.permission.RECORD_AUDIO])
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val saveIntent = Intent("dev.rylry.SAVE_BUFFERS")
         val pendingIntent: PendingIntent = PendingIntent.getBroadcast(
-            this,
-            0,
-            saveIntent,
-            PendingIntent.FLAG_IMMUTABLE
+            this, 0, saveIntent, PendingIntent.FLAG_IMMUTABLE
         )
-        // Create notification
+
+        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Clip::Recording")
+        wakeLock.acquire()
+        startRecording()
+        handler.post(watchdogRunnable)
+
         val channelId = "RecordingServiceChannel"
         createNotificationChannel(channelId)
+
         val notification = NotificationCompat.Builder(this, channelId)
-            .setContentTitle("Recording Audio")
-            .setContentText("Your audio is being recorded")
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+            .setContentTitle("Recording Audio")
+            .setContentText("Tap button to clip last 30 seconds")
+            .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
             .addAction(
-                android.R.drawable.ic_btn_speak_now,
+                android.R.drawable.ic_menu_add,
                 "Save",
                 pendingIntent
             )
+            .setStyle(
+                MediaNotificationCompat.MediaStyle()
+                    .setShowActionsInCompactView(0) // show first action collapsed
+            )
             .build()
 
-        // Start foreground
         startForeground(1, notification)
-
-        // Start recording in background thread
         startRecording()
+
         return START_STICKY
     }
 
@@ -106,60 +122,41 @@ class RecordingService : Service() {
         super.onDestroy()
         stopRecording()
         unregisterReceiver(saveReceiver)
-        record?.release()
-        record = null
     }
 
     private fun createNotificationChannel(channelId: String) {
         val channel = NotificationChannel(
-            channelId,
-            "Audio Recording Service",
-            NotificationManager.IMPORTANCE_LOW
-        )
+            channelId, "Audio Recording Service", NotificationManager.IMPORTANCE_HIGH
+        ).apply {
+            enableVibration(true)
+        }
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(channel)
     }
 
-    fun startRecording(){
-        isRecording = true
-        record?.startRecording()
-        recordingThread = Thread {
-            while (isRecording) {
-                record?.read(audioBuffer, audioWritePointer, if(audioWritePointer + audioChunkSize < audioBufferSize) audioChunkSize else audioBufferSize - audioWritePointer)
-                if(audioWritePointer + audioChunkSize >= audioBufferSize) record?.read(audioBuffer, 0, audioChunkSize - audioBufferSize + audioWritePointer)
-                audioWritePointer = (audioWritePointer + audioChunkSize) % audioBufferSize
-            }
-        }
-        recordingThread?.start()
+    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
+    fun startRecording() {
+        NativeAudio.start()
     }
 
     fun stopRecording() {
-        isRecording = false
-        try {
-            recordingThread?.join()
-        } catch (e: InterruptedException) {
-            e.printStackTrace()
-        }
-        record?.stop()
+        NativeAudio.stop()
     }
 
     fun saveBuffersM4A() {
         val clipTime = System.currentTimeMillis()
         val outputFile = File(filesDir, "cache.m4a")
 
-        val first = audioBuffer.copyOfRange(audioWritePointer, audioBuffer.size)
-        val second = audioBuffer.copyOfRange(0, audioWritePointer)
-        val pcmData = first + second
+        // Fetch raw PCM from JNI layer
+        val buffer = ByteArray(44100 * 30 * 2)
+        NativeAudio.copySnapshot(buffer)
 
         val sampleRate = 44100
-        val channelCount = 1 // mono
+        val channelCount = 1
         val bitRate = 128_000
 
-        // --- Setup encoder ---
         val format = MediaFormat.createAudioFormat(
-            MediaFormat.MIMETYPE_AUDIO_AAC,
-            sampleRate,
-            channelCount
+            MediaFormat.MIMETYPE_AUDIO_AAC, sampleRate, channelCount
         ).apply {
             setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
             setInteger(MediaFormat.KEY_BIT_RATE, bitRate)
@@ -170,76 +167,60 @@ class RecordingService : Service() {
         encoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
         encoder.start()
 
-        // --- Setup muxer ---
         val muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
         var muxerTrackIndex = -1
         var muxerStarted = false
 
         val bufferInfo = MediaCodec.BufferInfo()
-        val inputBuffers = encoder.inputBuffers
-        val outputBuffers = encoder.outputBuffers
-
         var pcmOffset = 0
 
-        while (pcmOffset < pcmData.size) {
-            // Feed PCM to encoder
+        while (pcmOffset < buffer.size) {
             val inputIndex = encoder.dequeueInputBuffer(10000)
             if (inputIndex >= 0) {
-                val inputBuffer = inputBuffers[inputIndex]
+                val inputBuffer = encoder.getInputBuffer(inputIndex)!!
                 inputBuffer.clear()
-
-                val bytesToWrite = min(inputBuffer.capacity(), pcmData.size - pcmOffset)
-                inputBuffer.put(pcmData, pcmOffset, bytesToWrite)
+                val bytesToWrite = min(inputBuffer.capacity(), buffer.size - pcmOffset)
+                inputBuffer.put(buffer, pcmOffset, bytesToWrite)
 
                 val presentationTimeUs = (pcmOffset.toLong() * 1_000_000L) / (sampleRate * 2 * channelCount)
                 encoder.queueInputBuffer(inputIndex, 0, bytesToWrite, presentationTimeUs, 0)
                 pcmOffset += bytesToWrite
             }
 
-            // Get encoded output
             var outputIndex = encoder.dequeueOutputBuffer(bufferInfo, 10000)
             while (outputIndex >= 0) {
-                val encodedData = outputBuffers[outputIndex]
-                encodedData.position(bufferInfo.offset)
-                encodedData.limit(bufferInfo.offset + bufferInfo.size)
-
+                val encodedData = encoder.getOutputBuffer(outputIndex)!!
                 if (!muxerStarted) {
-                    val newFormat = encoder.outputFormat
-                    muxerTrackIndex = muxer.addTrack(newFormat)
+                    muxerTrackIndex = muxer.addTrack(encoder.outputFormat)
                     muxer.start()
                     muxerStarted = true
                 }
-
                 muxer.writeSampleData(muxerTrackIndex, encodedData, bufferInfo)
                 encoder.releaseOutputBuffer(outputIndex, false)
                 outputIndex = encoder.dequeueOutputBuffer(bufferInfo, 0)
             }
         }
 
-        // --- Signal end of stream ---
-        val inputIndex = encoder.dequeueInputBuffer(10000)
-        if (inputIndex >= 0) {
-            encoder.queueInputBuffer(inputIndex, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+        // Signal EOS
+        val finalInputIndex = encoder.dequeueInputBuffer(10000)
+        if (finalInputIndex >= 0) {
+            encoder.queueInputBuffer(finalInputIndex, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
         }
 
         // Drain remaining output
-        var outputIndex = encoder.dequeueOutputBuffer(bufferInfo, 10000)
-        while (outputIndex >= 0) {
-            val encodedData = outputBuffers[outputIndex]
-            encodedData.position(bufferInfo.offset)
-            encodedData.limit(bufferInfo.offset + bufferInfo.size)
-
+        var finalOutputIndex = encoder.dequeueOutputBuffer(bufferInfo, 10000)
+        while (finalOutputIndex >= 0) {
+            val encodedData = encoder.getOutputBuffer(finalOutputIndex)!!
             muxer.writeSampleData(muxerTrackIndex, encodedData, bufferInfo)
-            encoder.releaseOutputBuffer(outputIndex, false)
-            outputIndex = encoder.dequeueOutputBuffer(bufferInfo, 0)
+            encoder.releaseOutputBuffer(finalOutputIndex, false)
+            finalOutputIndex = encoder.dequeueOutputBuffer(bufferInfo, 0)
         }
-        // --- Cleanup ---
+
         encoder.stop()
         encoder.release()
         muxer.stop()
         muxer.release()
 
-        // Make file accessible to all
         downloadCache(this, clipTime)
     }
 
@@ -248,26 +229,23 @@ class RecordingService : Service() {
         if (!sourceFile.exists()) return
 
         val values = ContentValues().apply {
-            put(MediaStore.Audio.Media.DISPLAY_NAME, "clip_${time}")
+            put(MediaStore.Audio.Media.DISPLAY_NAME, "clip_${time}.m4a")
             put(MediaStore.Audio.Media.MIME_TYPE, "audio/mp4")
             put(MediaStore.Audio.Media.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
         }
 
         val resolver = context.contentResolver
-        val uri: Uri = (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        val uri: Uri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
         } else {
-            val musicDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC)
-            if (!musicDir.exists()) musicDir.mkdirs()
-            val destFile = File(musicDir, "clip_${time}.m4a")
-            Uri.fromFile(destFile)
-        })!!
+            // TODO: Handle Legacy Storage for pre-Q if needed
+            null
+        } ?: return
 
-        resolver.openOutputStream(uri, "w")?.use { out ->
+        resolver.openOutputStream(uri)?.use { out ->
             FileInputStream(sourceFile).use { input ->
                 input.copyTo(out)
             }
-            out.flush()   // ensure all bytes are written
         }
     }
 }

@@ -16,6 +16,14 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+        }
+        externalNativeBuild {
+            cmake {
+                cppFlags += ""
+            }
+        }
     }
 
     buildTypes {
@@ -37,6 +45,12 @@ android {
     buildFeatures {
         compose = true
     }
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
 }
 
 dependencies {
@@ -52,6 +66,8 @@ dependencies {
     implementation(libs.tensorflow.lite)
     implementation(libs.tensorflow.lite.gpu)
     implementation(libs.tensorflow.lite.support)
+    implementation(libs.androidx.media)
+
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
