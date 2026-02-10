@@ -13,6 +13,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import android.widget.Button
 import android.widget.Toast
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.activity.viewModels
 
 class MainActivity : ComponentActivity() {
     private var recordingService: RecordingService? = null
@@ -28,19 +31,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun setupUI() {
-        val saveButton = Button(this).apply {
-            text = "Save Current Buffer"
-            setOnClickListener {
-                if (bound) {
-                    recordingService?.saveBuffersM4A()
-                    Toast.makeText(this@MainActivity, "Buffer saved!", Toast.LENGTH_SHORT).show()
-                } else {
-                    Toast.makeText(this@MainActivity, "Service not bound", Toast.LENGTH_SHORT)
-                        .show()
-                }
-            }
+        enableEdgeToEdge()
+        setContent {
+            // Provide your ViewModel to Compose
+            val viewModel by viewModels<MainViewModel>()
+            MainScreen(viewModel)  // <-- the Compose screen you designed
         }
-        setContentView(saveButton)
     }
 
     // Launcher for audio
