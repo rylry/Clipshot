@@ -29,7 +29,7 @@ import java.io.File
 import java.io.FileInputStream
 import kotlin.math.min
 
-private const val TIMEOUT_MCRS = 10000
+private const val TIMEOUT_MCRS : Long = 10000
 
 class RecordingService : Service() {
     private val binder = AudioServiceBinder()
@@ -37,7 +37,6 @@ class RecordingService : Service() {
     inner class AudioServiceBinder : Binder() {
         fun getService(): RecordingService = this@RecordingService
     }
-
     private lateinit var wakeLock: PowerManager.WakeLock
 
     private val watchdogInterval = 5000L // 5 seconds
@@ -243,7 +242,6 @@ class RecordingService : Service() {
         val uri: Uri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
         } else {
-            // TODO: Handle Legacy Storage for pre-Q if needed
             null
         } ?: return
 
