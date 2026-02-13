@@ -31,7 +31,7 @@ fun MainScreen(viewModel: MainViewModel) {
         }
 
         // Bottom buttons
-        SecondaryTabRow (
+        TabRow (
             selectedTabIndex = selectedTab,
             indicator = {}, // remove default indicator
             modifier = Modifier

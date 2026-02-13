@@ -10,7 +10,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.io.File
 
-class MainViewModel : ViewModel() {
+final class MainViewModel : ViewModel() {
     var isMicOn by mutableStateOf(true)
     var isCameraOn by mutableStateOf(true)
     var isRecording by mutableStateOf(false)
