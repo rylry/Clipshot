@@ -13,7 +13,7 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = 1
-        versionName = "1.0"
+        versionName = "0.1.0-alpha"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk {
@@ -33,8 +33,10 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
@@ -47,7 +49,7 @@ android {
     }
     externalNativeBuild {
         cmake {
-            path = file("src/main/cpp/CMakeLists.txt")
+            path = file("src/main/cpp/CMakeLists.txt") // adjust path to your CMakeLists.txt
             version = "3.22.1"
         }
     }
@@ -57,21 +59,13 @@ dependencies {
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.media)
     implementation(libs.androidx.activity.compose)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
-    implementation(libs.tensorflow.lite)
-    implementation(libs.tensorflow.lite.gpu)
-    implementation(libs.tensorflow.lite.support)
-    implementation(libs.androidx.media)
-    implementation(libs.androidx.compose.runtime)
-    implementation(libs.androidx.ui)
-    implementation(libs.androidx.compose.foundation.layout)
-    implementation(libs.androidx.material3)
-
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
